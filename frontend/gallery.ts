@@ -120,12 +120,13 @@ async function locateCurrent(id:string,path:string){
     if(epoch===locationEpoch)await locateItem(item);
   }catch(error){lastLocation='';toast((error as Error).message);}
 }
-async function uploadFiles(files:File[]){
+async function uploadFiles(files:File[],destination?:string){
   if(!files.length)return;
   const button=$<HTMLButtonElement>('upload'),inputRoot=state.roots.find(root=>root.id==='builtin-input');
+  if(button.disabled){toast('正在上传，请稍候再粘贴');return;}
   if(!inputRoot){toast('找不到 ComfyUI input 目录');return;}
   const folder=currentPath(),inInput=folder===inputRoot.path||folder.startsWith(inputRoot.path+'/')||folder.startsWith(inputRoot.path+'\\');
-  const subfolder=inInput?folder.slice(inputRoot.path.length).replace(/^[\\/]+/,'').replaceAll('\\','/'):'media_library';
+  const subfolder=destination??(inInput?folder.slice(inputRoot.path.length).replace(/^[\\/]+/,'').replaceAll('\\','/'):'media_library');
   const failures:string[]=[],uploaded:Detail[]=[];let saved=0;button.disabled=true;
   try{
     for(const[index,file]of files.entries()){
@@ -166,7 +167,7 @@ function updateHeading() {
   $<HTMLButtonElement>('scan').disabled=homeView||state.recent;
   const inputRoot=state.roots.find(r=>r.id==='builtin-input'),folder=currentPath();
   const uploadPath=inputRoot&&(folder===inputRoot.path||folder.startsWith(inputRoot.path+'/')||folder.startsWith(inputRoot.path+'\\'))?folder:'input/media_library';
-  $('upload').title=`上传到 ${uploadPath}`;
+  $('upload').title=`上传到 ${uploadPath}；粘贴图片则保存到 input/pasted`;
   for(const row of document.querySelectorAll<HTMLElement>('.root-row'))row.classList.toggle('active',row.dataset.path===currentPath());
 }
 async function loadFiles(append=false) {
@@ -479,6 +480,14 @@ async function pollStatus(){
   }catch(e){if(epoch!==statusEpoch)return;$('scan-status').textContent=(e as Error).message;statusTimer=window.setTimeout(()=>void pollStatus(),5000);}
 }
 async function main(){
+  document.addEventListener('paste',event=>{
+    if(event.defaultPrevented||(event.target as Element)?.closest?.('input,textarea,[contenteditable]:not([contenteditable="false"])'))return;
+    const files=Array.from(event.clipboardData?.files||[]).filter(file=>file.type.startsWith('image/'));
+    if(!files.length||previewOnly&&window.parent===window)return;
+    event.preventDefault();event.stopPropagation();
+    if(previewOnly)window.parent.postMessage({type:'media-library-paste-image',file:files[0]},location.origin);
+    else void uploadFiles(files,'pasted');
+  });
   if(previewOnly){document.body.classList.add('preview-only');$<HTMLDialogElement>('detail-dialog').open=true;const id=params.get('id')||'',path=params.get('path')||'';if(id||path)await openDetail(id,path);else $('detail').replaceChildren(el('p','muted','点击浏览素材库选择文件'));return;}
   const viewer=$<HTMLDialogElement>('detail-dialog');viewer.addEventListener('cancel',event=>{event.preventDefault();closeDetail();});viewer.addEventListener('click',event=>{if(event.target===viewer)closeDetail();});
   for(const [key,label]of Object.entries({'':'全部',...names})){const button=action(label,async()=>{state.kind=key;state.offset=0;state.focusId='';for(const b of $('types').children)b.classList.toggle('active',(b as HTMLElement).dataset.kind===key);clearSelection();await loadFiles();});button.dataset.kind=key;button.classList.toggle('active',!key);$('types').append(button);}

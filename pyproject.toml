@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-media-library"
-version = "0.1.10"
+version = "0.1.11"
 description = "Local multi-format media library and original-path picker for ComfyUI"
 requires-python = ">=3.10"
 license = {text = "MIT"}
