@@ -1,0 +1,21 @@
+[project]
+name = "comfyui-media-library"
+version = "0.1.9"
+description = "Local multi-format media library and original-path picker for ComfyUI"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["aiohttp>=3.9", "Pillow>=10"]
+
+[project.urls]
+Repository = "https://github.com/wangweihong/comfyui-media-library"
+Issues = "https://github.com/wangweihong/comfyui-media-library/issues"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib --confcutdir=tests"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "Media Library 素材库"

@@ -1,0 +1,23 @@
+# Environments and generated local state
+.venv/
+node_modules/
+__pycache__/
+.pytest_cache/
+test-results/
+playwright-report/
+*.pyc
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.env
+.env.*
+/release/
+
+# Machine-specific diagnostics and workflows stay local
+/docs/*
+!/docs/api.md
+!/docs/gallery-overview.png
+!/docs/gallery-video.png
+!/docs/directory-compact-icons.png
+/scripts/test_local_*
+/example_workflows/local_validation.json
