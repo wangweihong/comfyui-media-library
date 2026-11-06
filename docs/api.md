@@ -4,11 +4,11 @@
 
 | 方法与路径 | 功能 |
 | --- | --- |
-| `GET /gallery` | 独立图库；`mode=preview&id=…` 显示节点简洁预览 |
+| `GET /gallery` | 独立图库；`mode=preview&id=…` 显示节点简洁预览；`current_id` / `current_path` 定位已有素材所在目录 |
 | `GET /roots` | 素材目录与 FFmpeg/ffprobe 状态 |
 | `POST /roots` | `{path,name?}` 添加服务器绝对目录 |
 | `DELETE /roots/{id}` | 移除自定义目录，保留原文件；JSON 请求体 `{}` |
-| `GET /files` | 分页文件列表；参数 root_id、folder、q、kind、sort、direction、offset、limit |
+| `GET /files` | 分页文件列表；参数 root_id、folder、q、kind、sort、direction、offset、limit、focus_id |
 | `GET /folders?path=…` | 当前层可浏览的非隐藏子目录 |
 | `GET /detail?id=…` | 文件信息、媒体属性、摘要、生成节点参数与原始元数据；也接受 path |
 | `GET /file?id=…` | 原文件流，支持 HTTP Range；非媒体文件作为附件 |
@@ -23,6 +23,10 @@
 | `POST /operations/apply` | `{token,confirmed:true}`，复查并执行快照，返回逐项结果 |
 
 `/files` 默认只显示当前层；显式使用 `recursive=1` 才平铺子目录，`recent=1` 查询最近使用。未指定目录且不是最近使用时返回空文件列表。
+
+`focus_id` 存在于当前查询结果时，服务端计算并返回该文件所在页，响应 `offset` 为实际分页位置；不需要客户端依次加载前面的分页。
+
+上传直接调用 ComfyUI 自带的 `POST /upload/image`，不属于 `/media_library/` 路由。请求为 multipart 表单：`image` 为文件、`type=input`、`subfolder` 为 input 下的相对目录，不设置 overwrite。遵循响应中的实际 `name` / `subfolder` / `type` 解析路径，再通过 `/detail?path=…` 加入索引。上传本身不产生最近使用记录，也不自动选择素材。
 
 修改接口要求同来源的 JSON 请求。文件操作限于配置目录，拒绝覆盖同名目标；服务端快照只可使用一次，有效 10 分钟。每批最多 1000 个主文件，关联的明确元数据附件包含在操作清单中。批量操作可能部分成功，响应保留已完成动作与错误。
 

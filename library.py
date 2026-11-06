@@ -186,7 +186,7 @@ class Library:
         data['mtime'] = data['mtime_ns'] / 1e9
         return data
 
-    def files(self, *, q='', kind='', root_id='', folder='', recursive=False, sort='time', direction='desc', offset=0, limit=80, recent=False):
+    def files(self, *, q='', kind='', root_id='', folder='', recursive=False, sort='time', direction='desc', offset=0, limit=80, recent=False, focus_id=''):
         offset, limit = max(0, int(offset)), min(200, max(1, int(limit)))
         where, args = ['1=1' if recent else 'f.missing=0'], []
         if q:
@@ -218,6 +218,9 @@ class Library:
         condition = ' AND '.join(where)
         with self.lock:
             total = self.db.execute(f'SELECT count(*) FROM {table} WHERE {condition}', args).fetchone()[0]
+            if focus_id:
+                position = self.db.execute(f'SELECT position FROM (SELECT f.id, ROW_NUMBER() OVER (ORDER BY {order},f.id)-1 AS position FROM {table} WHERE {condition}) WHERE id=?', [*args, focus_id]).fetchone()
+                if position is not None: offset = (position['position'] // limit) * limit
             rows = self.db.execute(f'SELECT f.* FROM {table} WHERE {condition} ORDER BY {order},f.id LIMIT ? OFFSET ?', [*args, limit, offset]).fetchall()
         return {'items': [self.brief(row) for row in rows], 'total': total, 'offset': offset, 'limit': limit}
 

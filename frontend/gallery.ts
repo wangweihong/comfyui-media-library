@@ -24,8 +24,8 @@ const api = async <T = any>(path:string, data?:unknown, method=data === undefine
 };
 const names:Record<string,string> = {image:'图片',video:'视频',audio:'音频',text:'文本',ply:'PLY',other:'其他'};
 const glyphs:Record<string,string> = {image:'▧',video:'▷',audio:'♫',text:'TXT',ply:'PLY',other:'FILE'};
-const state = {roots:[] as Root[], root:'', folder:'', q:'', kind:'', sort:'time', direction:'desc', recent:false, recursive:false, selectionMode:false, folders:[] as Folder[], items:[] as Item[], total:0, selected:new Set<string>(), current:null as Detail|null};
-let renderedScope='',statusEpoch=0;
+const state = {roots:[] as Root[], root:'', folder:'', q:'', kind:'', sort:'time', direction:'desc', recent:false, recursive:false, selectionMode:false, focusId:'',offset:0, folders:[] as Folder[], items:[] as Item[], total:0, selected:new Set<string>(), current:null as Detail|null};
+let renderedScope='',statusEpoch=0,locationEpoch=0,lastLocation='';
 let listEpoch=0, detailEpoch=0, toastTimer=0, statusTimer=0, previewTimer=0;
 let plan:Plan|null=null, operationIds:string[]=[], operation='',moveDestination='';
 let operationEpoch=0,moveEpoch=0;
@@ -85,11 +85,71 @@ function currentPath(){return state.folder||state.roots.find(r=>r.id===state.roo
 function resetRecursive(){state.recursive=false;$<HTMLInputElement>('recursive').checked=false;}
 function clearSearch(){state.q='';$<HTMLInputElement>('search').value='';}
 async function chooseFolder(root:string,folder:string) {
-  state.root=root;state.folder=folder===state.roots.find(r=>r.id===root)?.path?'':folder;state.recent=false;resetRecursive();clearSearch();clearSelection();
+  state.root=root;state.folder=folder===state.roots.find(r=>r.id===root)?.path?'':folder;state.recent=false;state.focusId='';state.offset=0;resetRecursive();clearSearch();clearSelection();
   await loadFiles();
   await api('/scan',{path:currentPath(),recursive:false});void pollStatus();
 }
-async function home(){state.root='';state.folder='';state.recent=false;resetRecursive();clearSearch();clearSelection();await loadFiles();}
+function rootForItem(item:Detail){return state.roots.find(root=>root.id===(item as Detail&{root_id?:string}).root_id)||[...state.roots].sort((a,b)=>b.path.length-a.path.length).find(root=>item.path.startsWith(root.path+'/')||item.path.startsWith(root.path+'\\'));}
+async function revealFolder(root:Root,folder:string){
+  let row=Array.from($('roots').querySelectorAll<HTMLElement>('.root-row')).find(node=>node.dataset.path===root.path),path=root.path;
+  const segments=folder.slice(root.path.length).split(/[\\/]/).filter(Boolean);
+  for(const segment of segments){
+    if(!row)break;
+    const children=row.nextElementSibling as HTMLElement;children.hidden=false;row.querySelector('button')!.textContent='⌄';
+    await fillFolders(children,path,root.id);
+    path=path.replace(/[\\/]$/,'')+(root.path.includes('\\')?'\\':'/')+segment;
+    row=Array.from(children.querySelectorAll<HTMLElement>('.root-row')).find(node=>node.dataset.path===path);
+  }
+  updateHeading();
+}
+async function locateItem(item:Detail){
+  const root=rootForItem(item);if(!root)throw new Error('当前素材不在已配置的目录中');
+  const folder=parentPath(item.path);
+  state.root=root.id;state.folder=folder===root.path?'':folder;state.recent=false;state.kind='';state.offset=0;state.focusId=item.id;
+  resetRecursive();clearSearch();clearSelection();
+  for(const button of $('types').children)button.classList.toggle('active',(button as HTMLElement).dataset.kind==='');
+  await loadFiles();await revealFolder(root,folder);
+  $('grid').querySelector<HTMLElement>(`.card[data-id="${item.id}"]`)?.scrollIntoView({block:'center'});
+  await api('/scan',{path:folder,recursive:false});void pollStatus();
+}
+async function locateCurrent(id:string,path:string){
+  const key=id+'\n'+path;if(lastLocation===key)return;
+  lastLocation=key;const epoch=++locationEpoch;
+  try{
+    const item=await api<Detail>('/detail?'+new URLSearchParams({id,path}));
+    if(epoch===locationEpoch)await locateItem(item);
+  }catch(error){lastLocation='';toast((error as Error).message);}
+}
+async function uploadFiles(files:File[]){
+  if(!files.length)return;
+  const button=$<HTMLButtonElement>('upload'),inputRoot=state.roots.find(root=>root.id==='builtin-input');
+  if(!inputRoot){toast('找不到 ComfyUI input 目录');return;}
+  const folder=currentPath(),inInput=folder===inputRoot.path||folder.startsWith(inputRoot.path+'/')||folder.startsWith(inputRoot.path+'\\');
+  const subfolder=inInput?folder.slice(inputRoot.path.length).replace(/^[\\/]+/,'').replaceAll('\\','/'):'media_library';
+  const failures:string[]=[],uploaded:Detail[]=[];let saved=0;button.disabled=true;
+  try{
+    for(const[index,file]of files.entries()){
+      button.textContent=`上传 ${index+1}/${files.length}…`;
+      try{
+        const form=new FormData();form.append('image',file,file.name);form.append('type','input');form.append('subfolder',subfolder);
+        const response=await fetch(base.replace(/\/media_library$/,'')+'/upload/image',{method:'POST',body:form});
+        const text=await response.text();
+        if(!response.ok)throw new Error(response.status===413?'超过当前 ComfyUI 的上传大小限制':`上传失败（${response.status}）`);
+        const data=JSON.parse(text) as {name:string;subfolder:string;type:string};
+        if(!data.name)throw new Error('官方上传接口未返回文件名');saved++;
+        const root=state.roots.find(value=>value.id==='builtin-'+data.type)||inputRoot;
+        const separator=root.path.includes('\\')?'\\':'/';
+        const path=[root.path.replace(/[\\/]$/,''),...(data.subfolder||'').split(/[\\/]/).filter(Boolean),data.name].join(separator);
+        try{uploaded.push(await api<Detail>('/detail?'+new URLSearchParams({path})));}
+        catch(error){failures.push(`${file.name}：已上传，但无法读取信息：${(error as Error).message}`);}
+      }catch(error){failures.push(`${file.name}：${(error as Error).message}`);}
+    }
+    if(uploaded.length)await locateItem(uploaded[uploaded.length-1]);
+    toast(`已上传 ${saved}/${files.length} 个文件${failures.length?'\n'+failures.join('\n'):''}`);
+  }catch(error){toast((error as Error).message);}
+  finally{button.disabled=false;button.textContent='↑ 上传素材';$<HTMLInputElement>('upload-files').value='';}
+}
+async function home(){state.root='';state.folder='';state.recent=false;state.focusId='';state.offset=0;resetRecursive();clearSearch();clearSelection();await loadFiles();}
 function updateHeading() {
   const homeView=!state.recent&&!state.root;
   $('all').classList.toggle('active',homeView);$('recent').classList.toggle('active',state.recent);
@@ -104,25 +164,30 @@ function updateHeading() {
   $<HTMLInputElement>('recursive').disabled=!state.root||state.recent;
   $<HTMLInputElement>('search').disabled=homeView;
   $<HTMLButtonElement>('scan').disabled=homeView||state.recent;
+  const inputRoot=state.roots.find(r=>r.id==='builtin-input'),folder=currentPath();
+  const uploadPath=inputRoot&&(folder===inputRoot.path||folder.startsWith(inputRoot.path+'/')||folder.startsWith(inputRoot.path+'\\'))?folder:'input/media_library';
+  $('upload').title=`上传到 ${uploadPath}`;
   for(const row of document.querySelectorAll<HTMLElement>('.root-row'))row.classList.toggle('active',row.dataset.path===currentPath());
 }
 async function loadFiles(append=false) {
   const epoch=++listEpoch;
-  if(!state.root&&!state.recent){state.items=[];state.folders=[];state.total=0;renderedScope='home';renderGrid();updateHeading();updateSelection();$('more').hidden=true;$('paging').textContent='';return;}
-  const query=new URLSearchParams({q:state.q,kind:state.kind,root_id:state.root,folder:state.folder,recursive:state.recursive?'1':'0',sort:state.sort,direction:state.direction,recent:state.recent?'1':'0',offset:String(append?state.items.length:0),limit:'80'});
+  if(!state.root&&!state.recent){state.items=[];state.folders=[];state.total=0;renderedScope='home';renderGrid();updateHeading();updateSelection();$('from-start').hidden=true;$('more').hidden=true;$('paging').textContent='';return;}
+  const query=new URLSearchParams({focus_id:append?'':state.focusId,q:state.q,kind:state.kind,root_id:state.root,folder:state.folder,recursive:state.recursive?'1':'0',sort:state.sort,direction:state.direction,recent:state.recent?'1':'0',offset:String(append?state.offset+state.items.length:state.offset),limit:'80'});
   const showFolders=!state.recent&&!state.recursive;
   try {
     const [data,directories]=await Promise.all([
-      api<{items:Item[];total:number}>('/files?'+query),
+      api<{items:Item[];total:number;offset:number}>('/files?'+query),
       showFolders?api<{folders:Folder[]}>('/folders?'+new URLSearchParams({path:currentPath()})):Promise.resolve({folders:[] as Folder[]})
     ]);
     if(epoch!==listEpoch)return;
     const items=append?[...state.items,...data.items]:data.items;
     const scope=JSON.stringify([state.root,state.folder,state.recent,state.recursive,state.q,state.kind,state.sort,state.direction]);
     const changed=renderedScope!==scope||JSON.stringify([items,directories.folders])!==JSON.stringify([state.items,state.folders]);renderedScope=scope;
+    if(!append)state.offset=data.offset;
     state.items=items;state.folders=directories.folders;state.total=data.total;
     if(changed||!$('grid').childElementCount)renderGrid();updateHeading();updateSelection();
-    $('more').hidden=state.items.length>=data.total;$('paging').textContent=data.total?`已加载 ${state.items.length} / ${data.total}`:'';
+    $('from-start').hidden=state.offset===0;
+    $('more').hidden=state.offset+state.items.length>=data.total;$('paging').textContent=data.total?`已加载 ${state.items.length} / ${data.total}${state.offset?` · 从第 ${state.offset+1} 项开始`:''}`:'';
   } catch(e) {if(epoch===listEpoch){$('grid').replaceChildren(el('div','empty-grid',(e as Error).message));toast((e as Error).message);}}
 }
 function directoryCard(folder:Folder,rootId:string){
@@ -136,7 +201,7 @@ function renderGrid() {
   if(state.folders.length){for(const folder of state.folders)directories.append(directoryCard(folder,state.root));grid.append(directories);}
   if(!state.items.length&&!state.folders.length){grid.append(el('div','empty-grid',state.recent?'还没有使用记录。选择素材并点击“使用”后，将保留最近 20 项。':'没有匹配的素材。可更换筛选、添加目录或刷新索引。'));return;}
   for(const item of state.items) {
-    const card=el('article',`card ${state.current?.id===item.id?'selected':''} ${item.missing?'missing':''}`);card.tabIndex=0;card.title=item.name;card.dataset.id=item.id;
+    const card=el('article',`card ${(state.current?.id===item.id||state.focusId===item.id)?'selected':''} ${item.missing?'missing':''}`);card.tabIndex=0;card.title=item.name;card.dataset.id=item.id;
     const thumb=el('div','thumb');const glyph=el('span','file-glyph',item.kind==='other'?(item.extension.slice(1).toUpperCase()||'FILE'):glyphs[item.kind]);thumb.append(glyph);
     if(['image','video'].includes(item.kind)&&!item.missing) {
       const img=el('img');img.loading='lazy';img.alt=item.name;img.src=url('/thumb?id='+item.id);img.onerror=()=>img.remove();img.onload=()=>glyph.remove();thumb.append(img);
@@ -177,7 +242,7 @@ async function openDetail(id='',path='') {
   try {
     const item=await api<Detail>('/detail?'+new URLSearchParams({id,path}));if(epoch!==detailEpoch)return;
     if(!previewOnly&&!$<HTMLDialogElement>('detail-dialog').open)$<HTMLDialogElement>('detail-dialog').showModal();
-    state.current=item;renderDetail(item);for(const card of $('grid').children)card.classList.toggle('selected',(card as HTMLElement).dataset.id===item.id);
+    state.current=item;state.focusId=item.id;renderDetail(item);for(const card of $('grid').children)card.classList.toggle('selected',(card as HTMLElement).dataset.id===item.id);
   }catch(e){if(epoch!==detailEpoch)return;state.current=null;if(!previewOnly&&!$<HTMLDialogElement>('detail-dialog').open)$<HTMLDialogElement>('detail-dialog').showModal();$('detail').classList.add('has-item');$('detail').replaceChildren(el('div','detail-content error',(e as Error).message),action('关闭',closeDetail));if(!previewOnly)toast((e as Error).message);}
 }
 function closeDetail(){++detailEpoch;releaseMedia();$<HTMLDialogElement>('json-dialog').close();$<HTMLDialogElement>('generation-dialog').close();$<HTMLDialogElement>('detail-dialog').close();state.current=null;$('detail').classList.remove('has-item');$('detail').replaceChildren(el('div','empty-detail','选择文件以查看详情'));}
@@ -416,16 +481,19 @@ async function pollStatus(){
 async function main(){
   if(previewOnly){document.body.classList.add('preview-only');$<HTMLDialogElement>('detail-dialog').open=true;const id=params.get('id')||'',path=params.get('path')||'';if(id||path)await openDetail(id,path);else $('detail').replaceChildren(el('p','muted','点击浏览素材库选择文件'));return;}
   const viewer=$<HTMLDialogElement>('detail-dialog');viewer.addEventListener('cancel',event=>{event.preventDefault();closeDetail();});viewer.addEventListener('click',event=>{if(event.target===viewer)closeDetail();});
-  for(const [key,label]of Object.entries({'':'全部',...names})){const button=action(label,async()=>{state.kind=key;for(const b of $('types').children)b.classList.toggle('active',(b as HTMLElement).dataset.kind===key);clearSelection();await loadFiles();});button.dataset.kind=key;button.classList.toggle('active',!key);$('types').append(button);}
+  for(const [key,label]of Object.entries({'':'全部',...names})){const button=action(label,async()=>{state.kind=key;state.offset=0;state.focusId='';for(const b of $('types').children)b.classList.toggle('active',(b as HTMLElement).dataset.kind===key);clearSelection();await loadFiles();});button.dataset.kind=key;button.classList.toggle('active',!key);$('types').append(button);}
   $('all').onclick=()=>void home();
-  $('recent').onclick=()=>{state.root='';state.folder='';state.recent=true;resetRecursive();clearSearch();clearSelection();void loadFiles();};
+  $('recent').onclick=()=>{state.root='';state.folder='';state.recent=true;state.focusId='';state.offset=0;resetRecursive();clearSearch();clearSelection();void loadFiles();};
   $('parent').onclick=()=>{const root=state.roots.find(r=>r.id===state.root);if(!root||currentPath()===root.path){void home();return;}const parent=currentPath().replace(/[\\/][^\\/]+[\\/]?$/,'');void chooseFolder(root.id,parent||root.path);};
-  $('recursive').onchange=async()=>{state.recursive=$<HTMLInputElement>('recursive').checked;clearSelection();await loadFiles();await api('/scan',{path:currentPath(),recursive:state.recursive});void pollStatus();};
+  $('recursive').onchange=async()=>{state.recursive=$<HTMLInputElement>('recursive').checked;state.offset=0;state.focusId='';clearSelection();await loadFiles();await api('/scan',{path:currentPath(),recursive:state.recursive});void pollStatus();};
+  $('upload').onclick=()=>$<HTMLInputElement>('upload-files').click();
+  $('upload-files').onchange=()=>void uploadFiles(Array.from($<HTMLInputElement>('upload-files').files||[]));
   $('settings').onclick=showSettings;$('add-root').onclick=showSettings;
   $('scan').onclick=async()=>{try{await api('/scan',{path:currentPath(),recursive:state.recursive});toast(state.recursive?'已开始刷新当前目录及子目录':'已开始刷新当前层目录');clearTimeout(statusTimer);void pollStatus();}catch(e){toast((e as Error).message);}};
+  $('from-start').onclick=()=>{state.offset=0;state.focusId='';clearSelection();void loadFiles();};
   $('more').onclick=()=>void loadFiles(true);$('prune').onclick=async()=>{await api('/recents/prune',{});await loadFiles();};
-  let debounce=0;$('search').oninput=()=>{clearTimeout(debounce);debounce=window.setTimeout(()=>{state.q=$<HTMLInputElement>('search').value;clearSelection();void loadFiles();},240);};
-  $('sort').onchange=()=>{state.sort=$<HTMLSelectElement>('sort').value;void loadFiles();};$('direction').onclick=()=>{state.direction=state.direction==='desc'?'asc':'desc';$('direction').textContent=state.direction==='desc'?'↓':'↑';void loadFiles();};
+  let debounce=0;$('search').oninput=()=>{clearTimeout(debounce);debounce=window.setTimeout(()=>{state.q=$<HTMLInputElement>('search').value;state.offset=0;state.focusId='';clearSelection();void loadFiles();},240);};
+  $('sort').onchange=()=>{state.sort=$<HTMLSelectElement>('sort').value;state.offset=0;state.focusId='';void loadFiles();};$('direction').onclick=()=>{state.direction=state.direction==='desc'?'asc':'desc';state.offset=0;state.focusId='';$('direction').textContent=state.direction==='desc'?'↓':'↑';void loadFiles();};
   $('multi-select').onclick=()=>{state.selectionMode=!state.selectionMode;updateSelection();};
   document.addEventListener('pointerdown',e=>{if(!$('asset-context-menu').contains(e.target as Node))closeAssetMenu();});
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeAssetMenu();});
@@ -437,8 +505,8 @@ async function main(){
   $('plan-operation').onclick=()=>void previewOperation();$('apply-operation').onclick=()=>void applyOperation();
   for(const b of document.querySelectorAll<HTMLButtonElement>('[data-close]'))b.onclick=()=>$<HTMLDialogElement>(b.dataset.close!).close();
   $<HTMLFormElement>('root-form').onsubmit=async e=>{e.preventDefault();const form=e.currentTarget as HTMLFormElement,button=form.querySelector('button')!;button.disabled=true;try{const data=new FormData(form);await api('/roots',{name:data.get('name'),path:data.get('path')});form.reset();$('root-error').textContent='';await loadRoots();await loadFiles();toast('目录已添加，正在后台索引');}catch(e){$('root-error').textContent=(e as Error).message;}finally{button.disabled=false;}};
-  window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==window.parent||event.data?.type!=='media-library-current')return;if(event.data.id||event.data.path)void openDetail(String(event.data.id||''),String(event.data.path||''));});
-  await loadRoots();await loadFiles();void pollStatus();window.parent.postMessage({type:'media-library-ready'},location.origin);
+  window.addEventListener('message',event=>{if(event.origin!==location.origin||event.source!==window.parent||event.data?.type!=='media-library-current')return;if(event.data.id||event.data.path)void locateCurrent(String(event.data.id||''),String(event.data.path||''));});
+  await loadRoots();const initialId=params.get('current_id')||'',initialPath=params.get('current_path')||'';if(initialId||initialPath)await locateCurrent(initialId,initialPath);else await loadFiles();void pollStatus();window.parent.postMessage({type:'media-library-ready'},location.origin);
 }
 window.addEventListener('pagehide',()=>{++statusEpoch;releaseMedia();clearTimeout(statusTimer);});
 void main().catch(e=>toast(e.message));

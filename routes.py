@@ -122,7 +122,7 @@ def register_routes(routes, get_library, on_change=lambda: None):
         q = request.query
         if not (q.get('root_id') or q.get('folder') or q.get('recent') == '1'):
             return web.json_response({'items': [], 'total': 0, 'offset': 0, 'limit': 80})
-        payload = await work(get_library().files, recursive=q.get('recursive') == '1', q=q.get('q', ''), kind=q.get('kind', ''), root_id=q.get('root_id', ''), folder=q.get('folder', ''), sort=q.get('sort', 'time'), direction=q.get('direction', 'desc'), offset=q.get('offset', 0), limit=q.get('limit', 80), recent=q.get('recent') == '1')
+        payload = await work(get_library().files, focus_id=q.get('focus_id', ''), recursive=q.get('recursive') == '1', q=q.get('q', ''), kind=q.get('kind', ''), root_id=q.get('root_id', ''), folder=q.get('folder', ''), sort=q.get('sort', 'time'), direction=q.get('direction', 'desc'), offset=q.get('offset', 0), limit=q.get('limit', 80), recent=q.get('recent') == '1')
         return web.json_response(payload)
 
     @endpoint('GET', '/folders')

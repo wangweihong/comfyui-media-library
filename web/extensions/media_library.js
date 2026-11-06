@@ -62,7 +62,7 @@ app.registerExtension({
         const label=document.createElement("span");label.textContent="素材库 · 选中文件后点击使用";
         const done=document.createElement("button");done.textContent="关闭";done.style.cssText="cursor:pointer;color:inherit;background:#2b3547;border:0;border-radius:5px;padding:5px 14px";done.onclick=close;
         header.append(label,done);
-        frame=document.createElement("iframe");frame.title="素材库";frame.src=api.apiURL("/media_library/gallery");frame.style.cssText="width:100%;height:calc(100% - 40px);border:0";
+        frame=document.createElement("iframe");frame.title="素材库";frame.src=api.apiURL("/media_library/gallery?"+new URLSearchParams({current_id:String(id.value||""),current_path:String(path.value||"")}));frame.style.cssText="width:100%;height:calc(100% - 40px);border:0";
         dialog.append(header,frame);document.body.append(dialog);window.addEventListener("message",receive);
         dialog.addEventListener("cancel",event=>{event.preventDefault();close();});dialog.showModal();
       };
